@@ -42,11 +42,20 @@ abstract class CarteleraDao {
     @Query("UPDATE charlas SET favorita = NOT favorita WHERE id = :id")
     abstract suspend fun alternar(id: String)
 
-    /** La edición es una instantánea completa: reemplaza todo (aunque venga vacía), en una transacción. */
+    @Query("SELECT id FROM charlas WHERE favorita = 1")
+    abstract suspend fun idsFavoritas(): List<String>
+
+    /**
+     * La edición es una instantánea completa: reemplaza todo (aunque venga vacía), en una transacción.
+     * Las marcas se leen ADENTRO de la transacción (no al iniciar la petición), así se respeta lo que
+     * el usuario marcó o desmarcó mientras esperaba. Solo sobreviven las de charlas que siguen vigentes:
+     * una charla retirada pierde su marca y, si después regresa, regresa sin marcar.
+     */
     @Transaction
     open suspend fun reemplazar(fichas: List<Charla>) {
+        val favoritas = idsFavoritas().toSet()
         borrarCharlas()
-        guardar(fichas)
+        guardar(fichas.map { it.copy(favorita = it.id in favoritas) })
         guardarEdicion(Edicion(guardada = System.currentTimeMillis()))
     }
 }
