@@ -1,6 +1,8 @@
 package ar.jornadas.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import retrofit2.http.GET
 import kotlinx.coroutines.flow.Flow
 
@@ -16,19 +18,49 @@ data class Charla(@PrimaryKey val id: String, val titulo: String, val tema: Stri
     val hora: String, val sala: String, val ponente: String, val resumen: String,
     val favorita: Boolean = false)
 
+/** Marca de que hay una edición guardada (aunque tenga cero charlas). Una sola fila, id = 1. */
+@Entity(tableName = "edicion")
+data class Edicion(@PrimaryKey val id: Int = 1, val guardada: Long)
+
 @Dao
-interface CarteleraDao {
+abstract class CarteleraDao {
     @Query("SELECT * FROM charlas ORDER BY dia, hora, sala")
-    fun observar(): Flow<List<Charla>>
+    abstract fun observar(): Flow<List<Charla>>
+
+    @Query("SELECT * FROM edicion WHERE id = 1")
+    abstract fun observarEdicion(): Flow<Edicion?>
+
+    @Query("DELETE FROM charlas")
+    abstract suspend fun borrarCharlas()
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun guardar(fichas: List<Charla>)
+    abstract suspend fun guardar(fichas: List<Charla>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun guardarEdicion(edicion: Edicion)
 
     @Query("UPDATE charlas SET favorita = NOT favorita WHERE id = :id")
-    suspend fun alternar(id: String)
+    abstract suspend fun alternar(id: String)
+
+    /** La edición es una instantánea completa: reemplaza todo (aunque venga vacía), en una transacción. */
+    @Transaction
+    open suspend fun reemplazar(fichas: List<Charla>) {
+        borrarCharlas()
+        guardar(fichas)
+        guardarEdicion(Edicion(guardada = System.currentTimeMillis()))
+    }
 }
 
-@Database(entities = [Charla::class], version = 1, exportSchema = false)
+/** v1 -> v2: agrega la tabla edicion sin tocar charlas ni favoritas. Idempotente. */
+val MIGRACION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `edicion` (`id` INTEGER NOT NULL, `guardada` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+        // Instalaciones previas con charlas descargadas ya tienen una edición guardada.
+        db.execSQL("INSERT OR IGNORE INTO `edicion` (`id`, `guardada`) SELECT 1, 0 WHERE EXISTS (SELECT 1 FROM `charlas`)")
+    }
+}
+
+@Database(entities = [Charla::class, Edicion::class], version = 2, exportSchema = false)
 abstract class Archivo : RoomDatabase() {
     abstract fun cartelera(): CarteleraDao
 }
