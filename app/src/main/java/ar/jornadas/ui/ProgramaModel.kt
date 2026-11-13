@@ -19,12 +19,22 @@ sealed interface Contenido {
     data class Programa(val charlas: List<Charla>) : Contenido
 }
 
-class ProgramaModel(private val repo: AgendaRepository, val mesa: ServicioLocal) : ViewModel() {
+class ProgramaModel(
+    private val estado: SavedStateHandle,
+    private val repo: AgendaRepository,
+    val mesa: ServicioLocal,
+) : ViewModel() {
     val contenido: StateFlow<Contenido> = repo.programa
         .map { if (it == null) Contenido.SinEdicion else Contenido.Programa(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Contenido.Leyendo)
-    val dia = MutableStateFlow(0)
     val descarga: StateFlow<Descarga> = repo.descarga
+
+    // Filtros en el estado guardado de la tarea: sobreviven a rotar y a que Android mate el
+    // proceso, pero una tarea nueva arranca sin filtros (no van a disco ni a objetos estáticos).
+    val dia: StateFlow<Int> = estado.getStateFlow("dia", 0)
+    val tema: StateFlow<String> = estado.getStateFlow("tema", "Todos")
+    fun elegirDia(dia: Int) { estado["dia"] = dia }
+    fun elegirTema(tema: String) { estado["tema"] = tema }
 
     // El repositorio la deja pasar una sola vez por proceso: rotar no agrega peticiones.
     init { repo.cargarAlIniciar() }
@@ -37,7 +47,7 @@ class ProgramaModel(private val repo: AgendaRepository, val mesa: ServicioLocal)
         val Factory = viewModelFactory {
             initializer {
                 val servicios = (this[APPLICATION_KEY] as JornadasApp).servicios
-                ProgramaModel(servicios.agenda, servicios.mesa)
+                ProgramaModel(createSavedStateHandle(), servicios.agenda, servicios.mesa)
             }
         }
     }
